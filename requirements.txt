@@ -1,0 +1,5 @@
+numpy
+paho-mqtt
+pandas
+pvlib
+suntimes
