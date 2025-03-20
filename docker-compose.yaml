@@ -1,7 +1,7 @@
 services:
   chicken-lights:
-    image: chicken-lights:latest
-    build: /home/watsam/chicken_lights
+    image: ghcr.io/watsona4/chicken-lights:latest
+    build: .
     command: --mqtt-server=192.168.1.5
     restart: unless-stopped
-    
+
