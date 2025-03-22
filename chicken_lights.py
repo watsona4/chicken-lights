@@ -1,62 +1,38 @@
-import argparse
+import asyncio
+from types import FrameType
 import json
 import logging
 import signal
 import sys
 import time
+import os
 
 import numpy as np
 import paho.mqtt.client as mqtt
+from paho.mqtt.enums import CallbackAPIVersion
 import pandas as pd
 import suntimes
 from pvlib import atmosphere, location, spectrum
 
 from colour_system import CS_HDTV
 
-logging.basicConfig(
-    format="%(asctime)s [%(levelname)s]: %(message)s", level=logging.DEBUG
-)
+MQTT_HOST: str = str(os.environ.get("MQTT_HOST", ""))
+MQTT_PORT: int = int(os.environ.get("MQTT_PORT", 1883))
 
-TOPIC = "zigbee2mqtt/Chicken Coop Light/set"
+LATITUDE: float = float(os.environ.get("LATITUDE", 0))
+LONGITUDE: float = float(os.environ.get("LONGITUDE", 0))
+ALTITUDE: float = float(os.environ.get("ALTITUDE", 0))
 
-PARSER = argparse.ArgumentParser()
-PARSER.add_argument("--mqtt-server", help="IP address of the MQTT server")
-PARSER.add_argument("--port", type=int, default=1883, help="MQTT server port to use")
-PARSER.add_argument("--username", help="User name to log into MQTT server")
-PARSER.add_argument("--password", help="Password to log into MQTT server")
-PARSER.add_argument(
-    "--timezone", default="America/New_York", help="the timezone to use"
-)
-PARSER.add_argument(
-    "--latitude", type=float, default=43.09176073408273, help="latitude of location"
-)
-PARSER.add_argument(
-    "--longitude", type=float, default=-73.49606500488254, help="longitude of location"
-)
-PARSER.add_argument(
-    "--altitude", type=float, default=121, help="altitude of location in meters"
-)
+TZ: str = str(os.environ.get("TZ", "UTC"))
 
-ARGS = PARSER.parse_args()
+CLIENT: mqtt.Client = mqtt.Client(CallbackAPIVersion.VERSION2)
+
+TOPIC: str = "zigbee2mqtt/Chicken Coop Light/set"
+
+logging.basicConfig(format="%(asctime)s [%(levelname)s]: %(message)s", level=logging.DEBUG)
 
 
-def on_publish(client, userdata, mid):
-    try:
-        userdata.remove(mid)
-    except KeyError:
-        logging.error("Race condition detected!")
-
-
-CLIENT = mqtt.Client()
-
-CLIENT.enable_logger()
-if ARGS.username is not None and ARGS.password is not None:
-    CLIENT.username_pw_set(ARGS.username, ARGS.password)
-
-# CLIENT.on_publish = on_publish
-
-
-def handler(signum, frame):
+def handler(signum: int, frame: FrameType | None):
     CLIENT.disconnect()
     CLIENT.loop_stop()
     sys.exit(0)
@@ -65,43 +41,33 @@ def handler(signum, frame):
 signal.signal(signal.SIGTERM, handler)
 
 
-def main():
+async def publish_data():
 
-    # unacked_publish = set()
+    CLIENT.enable_logger()
 
-    # CLIENT.user_data_set(unacked_publish)
-    CLIENT.connect(ARGS.mqtt_server, ARGS.port, 60)
+    CLIENT.connect(MQTT_HOST, MQTT_PORT, 60)
     CLIENT.loop_start()
 
-    message = {
-        "name": "Chicken Lights Fake Time",
-        "icon": "mdi:calendar-clock",
-        "unique_id": "4bd5af15-fbb0-43a2-85d7-0f4b25fd9064",
-        "state_topic": "fake_time",
-        "device_class": "timestamp",
-    }
-    msg_info = CLIENT.publish(
+    CLIENT.publish(
         "homeassistant/sensor/chicken_lights/fake_time/config",
-        json.dumps(message),
+        json.dumps({
+            "name": "Chicken Lights Fake Time",
+            "icon": "mdi:calendar-clock",
+            "unique_id": "4bd5af15-fbb0-43a2-85d7-0f4b25fd9064",
+            "state_topic": "fake_time",
+            "device_class": "timestamp",
+        }),
         retain=True,
     )
-    # unacked_publish.add(msg_info.mid)
 
-    # while len(unacked_publish):
-    #     time.sleep(0.1)
-
-    # msg_info.wait_for_publish()
-
-    today = pd.Timestamp.today(tz=ARGS.timezone)
+    today = pd.Timestamp.today(tz=TZ)
     logging.info("Today is %s", today)
 
-    sun = suntimes.SunTimes(
-        latitude=ARGS.latitude, longitude=ARGS.longitude, altitude=ARGS.altitude
-    )
+    sun = suntimes.SunTimes(LONGITUDE, LATITUDE, ALTITUDE)
     logging.info("Sun: %s", sun)
 
-    sunrise = pd.Timestamp(sun.riselocal(today)).tz_convert(ARGS.timezone)
-    sunset = pd.Timestamp(sun.setlocal(today)).tz_convert(ARGS.timezone)
+    sunrise = pd.Timestamp(sun.riselocal(today)).tz_convert(TZ)
+    sunset = pd.Timestamp(sun.setlocal(today)).tz_convert(TZ)
 
     logging.info("Sunrise today: %s", sunrise)
     logging.info("Sunset today: %s", sunset)
@@ -116,11 +82,9 @@ def main():
     start_time = todayp.replace(hour=0, minute=0, second=0, microsecond=0, nanosecond=0)
     end_time = todayp.replace(hour=23, minute=59, second=59)
 
-    times = pd.date_range(start_time, end_time, freq="1min", tz=ARGS.timezone)
+    times = pd.date_range(start_time, end_time, freq="1min", tz=TZ)
 
-    loc = location.Location(
-        latitude=ARGS.latitude, longitude=ARGS.longitude, altitude=ARGS.altitude
-    )
+    loc = location.Location(LATITUDE, LONGITUDE, TZ, ALTITUDE)
 
     solpos = loc.get_solarposition(times)
 
@@ -139,12 +103,10 @@ def main():
     )
 
     lam = np.arange(380.0, 781.0, 5)
-    spec = np.array(
-        [
-            np.interp(lam, spectra["wavelength"], spectra["poa_global"][:, i])
-            for i in range(len(times))
-        ]
-    )
+    spec = np.array([
+        np.interp(lam, spectra["wavelength"], spectra["poa_global"][:, i])
+        for i in range(len(times))
+    ])
 
     norms = np.array([np.linalg.norm(v) for v in spec])
     nanmax = np.nanmax(norms)
@@ -171,7 +133,7 @@ def main():
     start_time = sunset - delta_time
     logging.info("Start time: %s", start_time)
 
-    now = pd.Timestamp.now(tz=ARGS.timezone)
+    now = pd.Timestamp.now(tz=TZ)
     logging.info("Time right now: %s", now)
 
     delay = start_time - now
@@ -193,35 +155,24 @@ def main():
         while pd.Timestamp.now().second % 60 != 0:
             time.sleep(0.5)
 
-        message = {
-            "state": "on",
-            "color": {"x": float(f"{row['X']:.4f}"), "y": float(f"{row['Y']:.4f}")},
-            "brightness": max(int(row["Brightness"] * 254), 1),
-        }
-        msg_info1 = CLIENT.publish(TOPIC, json.dumps(message), qos=1)
-        msg_info2 = CLIENT.publish("fake_time", row["Fake Time"].isoformat(), qos=1)
-        # unacked_publish.add(msg_info1.mid)
-        # unacked_publish.add(msg_info2.mid)
+        CLIENT.publish(
+            TOPIC,
+            json.dumps({
+                "state": "on",
+                "color": {"x": float(f"{row['X']:.4f}"), "y": float(f"{row['Y']:.4f}")},
+                "brightness": max(int(row["Brightness"] * 254), 1),
+            }),
+            qos=1,
+        )
+        CLIENT.publish("fake_time", row["Fake Time"].isoformat(), qos=1)
 
-        logging.info(message)
-
-        # while len(unacked_publish):
-        #     time.sleep(0.1)
-
-        # msg_info1.wait_for_publish()
-        # msg_info2.wait_for_publish()
         time.sleep(1)
 
-    msg_info = CLIENT.publish(TOPIC, json.dumps({"state": "off"}), qos=1)
-    # unacked_publish.add(msg_info.mid)
-
-    # while len(unacked_publish):
-    #     time.sleep(0.1)
-
-    # msg_info.wait_for_publish()
+    CLIENT.publish(TOPIC, json.dumps({"state": "off"}), qos=1)
 
 
-if __name__ == "__main__":
+def main():
+
     old_day = pd.Timestamp.today().date() - pd.Timedelta(days=1)
     while True:
         logging.info("    old_day: %s", old_day)
@@ -230,5 +181,13 @@ if __name__ == "__main__":
         logging.info("        today - old_day = %s", today - old_day)
         if today - old_day >= pd.Timedelta(days=1):
             old_day = today
-            main()
+            asyncio.run(publish_data())
         time.sleep(60)
+
+
+if __name__ == "__main__":
+
+    try:
+        sys.exit(main())
+    except Exception:
+        sys.exit(1)

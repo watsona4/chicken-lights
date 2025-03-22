@@ -2,6 +2,10 @@ services:
   chicken-lights:
     image: ghcr.io/watsona4/chicken-lights:latest
     build: .
-    command: --mqtt-server=192.168.1.5
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
     restart: unless-stopped
+    env_file:
+      - config.env
 
