@@ -1,20 +1,19 @@
 import asyncio
-from types import FrameType
 import json
 import logging
+import os
 import signal
 import sys
 import time
-import os
+from types import FrameType
 
 import numpy as np
 import paho.mqtt.client as mqtt
-from paho.mqtt.enums import CallbackAPIVersion
 import pandas as pd
 import suntimes
-from pvlib import atmosphere, location, spectrum
-
 from colour_system import CS_HDTV
+from paho.mqtt.enums import CallbackAPIVersion
+from pvlib import atmosphere, location, spectrum
 
 MQTT_HOST: str = str(os.environ.get("MQTT_HOST", ""))
 MQTT_PORT: int = int(os.environ.get("MQTT_PORT", 1883))
@@ -41,11 +40,21 @@ def handler(signum: int, frame: FrameType | None):
 signal.signal(signal.SIGTERM, handler)
 
 
+def on_healthcheck(client, userdata, message):
+    logging.info("Healthcheck requested...")
+    if message.payload.decode() == "CHECK":
+        client.publish("chicken_lights/healthcheck/status", "OK")
+
+
 async def publish_data():
 
     CLIENT.enable_logger()
 
     CLIENT.connect(MQTT_HOST, MQTT_PORT, 60)
+
+    CLIENT.subscribe("chicken_lights/healthcheck/status")
+    CLIENT.message_callback_add("chicken_lights/healthcheck/status", on_healthcheck)
+
     CLIENT.loop_start()
 
     CLIENT.publish(
