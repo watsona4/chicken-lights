@@ -17,6 +17,8 @@ from pvlib import atmosphere, location, spectrum
 
 MQTT_HOST: str = str(os.environ.get("MQTT_HOST", ""))
 MQTT_PORT: int = int(os.environ.get("MQTT_PORT", 1883))
+MQTT_USERNAME: str = str(os.environ.get("MQTT_USERNAME", ""))
+MQTT_PASSWORD: str = str(os.environ.get("MQTT_PASSWORD", ""))
 
 LATITUDE: float = float(os.environ.get("LATITUDE", 0))
 LONGITUDE: float = float(os.environ.get("LONGITUDE", 0))
@@ -49,6 +51,8 @@ def on_healthcheck(client, userdata, message):
 async def publish_data():
 
     CLIENT.enable_logger()
+
+    CLIENT.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
 
     CLIENT.connect(MQTT_HOST, MQTT_PORT, 60)
 
