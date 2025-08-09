@@ -9,7 +9,7 @@ COPY chicken_lights.py colour_system.py cie-cmf.txt healthcheck.py ./
 RUN chmod +x healthcheck.py
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
-  CMD /usr/bin/python3 healthcheck.py
+  CMD python3 healthcheck.py
 
 LABEL org.opencontainers.image.source=https://github.com/watsona4/chicken-lights
 
