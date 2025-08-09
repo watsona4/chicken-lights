@@ -4,9 +4,12 @@ RUN apk update && apk add --no-cache mosquitto-clients
 
 ENV HDF5_DISABLE_VERSION_CHECK=1
 
-COPY chicken_lights.py colour_system.py cie-cmf.txt healthcheck.sh ./
+COPY chicken_lights.py colour_system.py cie-cmf.txt healthcheck.py ./
 
-HEALTHCHECK CMD ./healthcheck.sh
+RUN chmod +x healthcheck.py
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+  CMD /usr/bin/python3 healthcheck.py
 
 LABEL org.opencontainers.image.source=https://github.com/watsona4/chicken-lights
 

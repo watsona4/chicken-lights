@@ -14,11 +14,23 @@ import suntimes
 from colour_system import CS_HDTV
 from paho.mqtt.enums import CallbackAPIVersion
 from pvlib import atmosphere, location, spectrum
+from pathlib import Path
 
 MQTT_HOST: str = str(os.environ.get("MQTT_HOST", ""))
 MQTT_PORT: int = int(os.environ.get("MQTT_PORT", 1883))
 MQTT_USERNAME: str = str(os.environ.get("MQTT_USERNAME", ""))
 MQTT_PASSWORD: str = str(os.environ.get("MQTT_PASSWORD", ""))
+
+DISCOVERY_PREFIX: str = str(os.environ.get("DISCOVERY_PREFIX", "homeassistant"))
+BASE_TOPIC: str = str(os.environ.get("BASE_TOPIC", "fake_time"))
+LIGHT_CMD_TOPIC: str = str(os.environ.get("CMD_TOPIC", "zigbee2mqtt/Chicken Coop Light/set"))
+
+DEVICE = {
+    "identifiers": ["chicken-lights-controller"],
+    "name": "Chicken Lights Controller",
+    "manufacturer": "custom",
+    "model": "pvlib-spectrl2",
+}
 
 LATITUDE: float = float(os.environ.get("LATITUDE", 0))
 LONGITUDE: float = float(os.environ.get("LONGITUDE", 0))
@@ -27,8 +39,6 @@ ALTITUDE: float = float(os.environ.get("ALTITUDE", 0))
 TZ: str = str(os.environ.get("TZ", "UTC"))
 
 CLIENT: mqtt.Client = mqtt.Client(CallbackAPIVersion.VERSION2)
-
-TOPIC: str = "zigbee2mqtt/Chicken Coop Light/set"
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s]: %(message)s", level=logging.DEBUG)
 
@@ -42,33 +52,62 @@ def handler(signum: int, frame: FrameType | None):
 signal.signal(signal.SIGTERM, handler)
 
 
-def on_healthcheck(client, userdata, message):
-    logging.info("Healthcheck requested...")
-    if message.payload.decode() == "CHECK":
-        client.publish("chicken_lights/healthcheck/status", "OK")
-
-
 async def publish_data():
 
     CLIENT.enable_logger()
 
     CLIENT.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
 
-    CLIENT.connect(MQTT_HOST, MQTT_PORT, 60)
+    CLIENT.will_set(f"{BASE_TOPIC}/availability", "offline", qos=1, retain=True)
 
-    CLIENT.subscribe("chicken_lights/healthcheck/status")
-    CLIENT.message_callback_add("chicken_lights/healthcheck/status", on_healthcheck)
+    CLIENT.connect(MQTT_HOST, MQTT_PORT, 60)
 
     CLIENT.loop_start()
 
+    CLIENT.publish(f"{BASE_TOPIC}/availability", "online", qos=1, retain=True)
+
     CLIENT.publish(
-        "homeassistant/sensor/chicken_lights/fake_time/config",
+        f"{DISCOVERY_PREFIX}/sensor/chicken_lights/fake_time/config",
         json.dumps({
             "name": "Chicken Lights Fake Time",
+            "unique_id": "chicken_lights_fake_time",
             "icon": "mdi:calendar-clock",
-            "unique_id": "4bd5af15-fbb0-43a2-85d7-0f4b25fd9064",
-            "state_topic": "fake_time",
             "device_class": "timestamp",
+            "state_topic": BASE_TOPIC,  # publishes ISO 8601 string
+            "availability_topic": f"{BASE_TOPIC}/availability",
+            "qos": 1,
+            "device": DEVICE,
+            "json_attributes_topic": f"{BASE_TOPIC}/status",
+        }),
+        retain=True,
+    )
+
+    CLIENT.publish(
+        f"{DISCOVERY_PREFIX}/sensor/chicken_lights/phase/config",
+        json.dumps({
+            "name": "Chicken Lights Phase",
+            "unique_id": "chicken_lights_phase",
+            "icon": "mdi:state-machine",
+            "state_topic": f"{BASE_TOPIC}/phase",  # “sleep”, “active”, “idle”
+            "availability_topic": f"{BASE_TOPIC}/availability",
+            "qos": 1,
+            "device": DEVICE,
+        }),
+        retain=True,
+    )
+
+    CLIENT.publish(
+        f"{DISCOVERY_PREFIX}/sensor/chicken_lights/brightness/config",
+        json.dumps({
+            "name": "Chicken Lights Brightness",
+            "unique_id": "chicken_lights_brightness",
+            "icon": "mdi:brightness-6",
+            "state_topic": f"{BASE_TOPIC}/status",
+            "value_template": "{{ value_json.brightness|int }}",
+            "unit_of_measurement": "/254",
+            "availability_topic": f"{BASE_TOPIC}/availability",
+            "qos": 1,
+            "device": DEVICE,
         }),
         retain=True,
     )
@@ -162,14 +201,23 @@ async def publish_data():
             delay.total_seconds(),
             now + delay,
         )
+        # Announce sleep phase and next wake for healthcheck
+        next_wake = (now + delay).timestamp()
+        CLIENT.publish(f"{BASE_TOPIC}/phase", "sleep", qos=1, retain=True)
+        Path("/tmp/phase").write_text("sleep")
+        Path("/tmp/next_wake").write_text(str(int(next_wake)))
         time.sleep(delay.total_seconds())
+
+    CLIENT.publish(f"{BASE_TOPIC}/phase", "active", qos=1, retain=True)
+    Path("/tmp/phase").write_text("active")
+    Path("/tmp/last_tick").write_text(str(int(time.time())))
 
     for idx, row in df.iterrows():
         while pd.Timestamp.now().second % 60 != 0:
             time.sleep(0.5)
 
         CLIENT.publish(
-            TOPIC,
+            LIGHT_CMD_TOPIC,
             json.dumps({
                 "state": "on",
                 "color": {"x": float(f"{row['X']:.4f}"), "y": float(f"{row['Y']:.4f}")},
@@ -177,11 +225,28 @@ async def publish_data():
             }),
             qos=1,
         )
-        CLIENT.publish("fake_time", row["Fake Time"].isoformat(), qos=1)
+        CLIENT.publish(BASE_TOPIC, row["Fake Time"].isoformat(), qos=1)
+
+        CLIENT.publish(
+            f"{BASE_TOPIC}/status",
+            json.dumps({
+                "x": float(f"{row['X']:.4f}"),
+                "y": float(f"{row['Y']:.4f}"),
+                "brightness": max(int(row["Brightness"] * 254), 1),
+                "ts": pd.Timestamp.now(tz=TZ).isoformat(),
+            }),
+            qos=1,
+        )
+
+        # tick files for healthcheck
+        Path("/tmp/last_tick").write_text(str(int(time.time())))
 
         time.sleep(1)
 
-    CLIENT.publish(TOPIC, json.dumps({"state": "off"}), qos=1)
+    CLIENT.publish(LIGHT_CMD_TOPIC, json.dumps({"state": "off"}), qos=1)
+
+    CLIENT.publish(f"{BASE_TOPIC}/phase", "idle", qos=1, retain=True)
+    Path("/tmp/phase").write_text("idle")
 
 
 def main():
