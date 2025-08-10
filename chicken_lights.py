@@ -23,7 +23,7 @@ MQTT_PASSWORD: str = str(os.environ.get("MQTT_PASSWORD", ""))
 
 DISCOVERY_PREFIX: str = str(os.environ.get("DISCOVERY_PREFIX", "homeassistant"))
 BASE_TOPIC: str = str(os.environ.get("BASE_TOPIC", "fake_time"))
-LIGHT_CMD_TOPIC: str = str(os.environ.get("CMD_TOPIC", "zigbee2mqtt/Chicken Coop Light/set"))
+LIGHT_CMD_TOPIC: str = str(os.environ.get("LIGHT_CMD_TOPIC", "zigbee2mqtt/Chicken Coop Light/set"))
 
 DEVICE = {
     "identifiers": ["chicken-lights-controller"],
