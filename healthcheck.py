@@ -1,56 +1,56 @@
 #!/usr/bin/env python3
-import os, sys, time
+import sys
+import time
 from pathlib import Path
-import paho.mqtt.client as mqtt
 
 
-def fail(msg):
-    print(msg)
-    sys.exit(1)
-
-
-phase_path = Path("/tmp/phase")
-phase = phase_path.read_text().strip() if phase_path.exists() else "unset"
-
-if phase == "sleep":
-    nw_path = Path("/tmp/next_wake")
-    if not nw_path.exists():
-        fail("sleep without next_wake")
+def read_int(path: str) -> int | None:
     try:
-        next_wake = int(nw_path.read_text().strip())
-    except Exception as e:
-        fail(f"bad next_wake: {e}")
-    if time.time() > next_wake + 600:
-        fail("overslept")
-elif phase in ("active", "unset"):
-    tick_path = Path("/tmp/last_tick")
-    if not tick_path.exists():
-        fail(f"{phase} without last_tick")
+        return int(Path(path).read_text().strip())
+    except Exception:
+        return None
+
+
+def read_str(path: str) -> str | None:
     try:
-        last_tick = int(tick_path.read_text().strip())
-    except Exception as e:
-        fail(f"bad last_tick: {e}")
-    if time.time() - last_tick > 180:
-        fail("stale tick")
-elif phase == "idle":
-    pass
-else:
-    fail(f"unknown phase: {phase}")
+        return Path(path).read_text().strip()
+    except Exception:
+        return None
 
-host = os.getenv("MQTT_HOST", "")
-port = int(os.getenv("MQTT_PORT", "1883"))
-user = os.getenv("MQTT_USERNAME", "")
-pwd = os.getenv("MQTT_PASSWORD", "")
-if not host:
-    fail("no MQTT_HOST")
 
-c = mqtt.Client()
-if user:
-    c.username_pw_set(user, pwd)
-try:
-    c.connect(host, port, 10)
-    c.disconnect()
-except Exception as e:
-    fail(f"broker unreachable: {e}")
+def main() -> int:
+    now = int(time.time())
 
-sys.exit(0)
+    phase = read_str("/tmp/phase") or "unknown"
+
+    # In active phase, we should be ticking every minute (you write /tmp/last_tick each publish loop).
+    if phase == "active":
+        last_tick = read_int("/tmp/last_tick")
+        if last_tick is None:
+            return 1
+        # Allow some slack: 3 minutes
+        if now - last_tick > 180:
+            return 1
+        return 0
+
+    # In sleep phase, we may intentionally not tick for hours. Use next_wake.
+    if phase == "sleep":
+        next_wake = read_int("/tmp/next_wake")
+        if next_wake is None:
+            # If we don't know when we wake, treat as unhealthy
+            return 1
+        # Healthy if we haven't missed the wake time by more than 10 minutes
+        if now > next_wake + 600:
+            return 1
+        return 0
+
+    # In idle phase, the day is done. Container is expected to just wait for tomorrow.
+    if phase == "idle":
+        return 0
+
+    # Unknown phase: be conservative
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

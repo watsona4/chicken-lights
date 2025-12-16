@@ -5,16 +5,17 @@ import os
 import signal
 import sys
 import time
+from pathlib import Path
 from types import FrameType
 
 import numpy as np
 import paho.mqtt.client as mqtt
 import pandas as pd
 import suntimes
-from colour_system import CS_HDTV
 from paho.mqtt.enums import CallbackAPIVersion
 from pvlib import atmosphere, location, spectrum
-from pathlib import Path
+
+from colour_system import CS_HDTV
 
 MQTT_HOST: str = str(os.environ.get("MQTT_HOST", ""))
 MQTT_PORT: int = int(os.environ.get("MQTT_PORT", 1883))
@@ -38,7 +39,10 @@ ALTITUDE: float = float(os.environ.get("ALTITUDE", 0))
 
 TZ: str = str(os.environ.get("TZ", "UTC"))
 
-CLIENT: mqtt.Client = mqtt.Client(CallbackAPIVersion.VERSION2)
+CLIENT: mqtt.Client = mqtt.Client(
+    callback_api_version=CallbackAPIVersion.VERSION2, client_id="chicken_lights", clean_session=True
+)
+CLIENT.reconnect_delay_set(min_delay=1, max_delay=60)
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s]: %(message)s", level=logging.DEBUG)
 
@@ -53,16 +57,6 @@ signal.signal(signal.SIGTERM, handler)
 
 
 async def publish_data():
-
-    CLIENT.enable_logger()
-
-    CLIENT.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
-
-    CLIENT.will_set(f"{BASE_TOPIC}/availability", "offline", qos=1, retain=True)
-
-    CLIENT.connect(MQTT_HOST, MQTT_PORT, 60)
-
-    CLIENT.loop_start()
 
     CLIENT.publish(f"{BASE_TOPIC}/availability", "online", qos=1, retain=True)
 
@@ -155,10 +149,7 @@ async def publish_data():
     )
 
     lam = np.arange(380.0, 781.0, 5)
-    spec = np.array([
-        np.interp(lam, spectra["wavelength"], spectra["poa_global"][:, i])
-        for i in range(len(times))
-    ])
+    spec = np.array([np.interp(lam, spectra["wavelength"], spectra["poa_global"][:, i]) for i in range(len(times))])
 
     norms = np.array([np.linalg.norm(v) for v in spec])
     nanmax = np.nanmax(norms)
@@ -250,6 +241,16 @@ async def publish_data():
 
 
 def main():
+
+    CLIENT.enable_logger()
+
+    CLIENT.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
+
+    CLIENT.will_set(f"{BASE_TOPIC}/availability", "offline", qos=1, retain=True)
+
+    CLIENT.connect(MQTT_HOST, MQTT_PORT, keepalive=120)
+
+    CLIENT.loop_start()
 
     old_day = pd.Timestamp.today().date() - pd.Timedelta(days=1)
     while True:
