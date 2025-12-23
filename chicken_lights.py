@@ -18,6 +18,12 @@ from pvlib import atmosphere, location, spectrum
 
 from colour_system import CS_HDTV
 
+# Optional timezone lookup from coordinates (gpsd)
+try:
+    from timezonefinder import TimezoneFinder
+except ImportError:
+    TimezoneFinder = None
+
 MQTT_HOST: str = str(os.environ.get("MQTT_HOST", "")).strip()
 MQTT_PORT: int = int(os.environ.get("MQTT_PORT", 1883))
 MQTT_USERNAME: str = str(os.environ.get("MQTT_USERNAME", "")).strip()
@@ -60,6 +66,7 @@ CLIENT.reconnect_delay_set(min_delay=1, max_delay=60)
 logging.basicConfig(format="%(asctime)s [%(levelname)s]: %(message)s", level=logging.DEBUG)
 
 _connected: bool = False
+_tz_finder: Optional[TimezoneFinder] = TimezoneFinder() if TimezoneFinder is not None else None
 
 
 def get_fix_from_gpsd(host: str, port: int = 2947, timeout_s: int = 5) -> Optional[Tuple[float, float, float]]:
@@ -110,6 +117,22 @@ def get_fix_from_gpsd(host: str, port: int = 2947, timeout_s: int = 5) -> Option
     except Exception as e:
         logging.warning("gpsd lookup failed (%s:%s): %s", host, port, e)
 
+    return None
+
+
+def lookup_timezone(lat: float, lon: float) -> Optional[str]:
+    """Best-effort timezone lookup for coordinates."""
+    if _tz_finder is None:
+        logging.debug("timezonefinder not available, using configured TZ")
+        return None
+
+    try:
+        tz_name = _tz_finder.timezone_at(lat=lat, lng=lon)
+        if tz_name:
+            return tz_name
+        logging.warning("No timezone found for lat=%s lon=%s, using configured TZ", lat, lon)
+    except Exception as e:
+        logging.warning("Timezone lookup failed for lat=%s lon=%s: %s", lat, lon, e)
     return None
 
 
@@ -196,6 +219,7 @@ signal.signal(signal.SIGINT, handler)
 def publish_day():
 
     lat, lon, alt = LATITUDE, LONGITUDE, ALTITUDE
+    tz = TZ
 
     # Get a fresh gpsd fix at the start of the day (if configured)
     if GPSD_HOST:
@@ -203,18 +227,24 @@ def publish_day():
         if fix:
             lat, lon, alt = fix
             logging.info("Using gpsd fix: lat=%s lon=%s alt=%sm", lat, lon, alt)
+            gps_tz = lookup_timezone(lat, lon)
+            if gps_tz:
+                tz = gps_tz
+                logging.info("Using timezone from gpsd fix: %s", tz)
         else:
             logging.warning("gpsd configured but no fix, using env LAT/LON/ALT")
     last_gpsd_check = time.time()
 
-    today = pd.Timestamp.today(tz=TZ)
+    logging.info("Active timezone: %s", tz)
+
+    today = pd.Timestamp.today(tz=tz)
     logging.info("Today is %s", today)
 
     sun = suntimes.SunTimes(lon, lat, alt)
     logging.info("Sun: %s", sun)
 
-    sunrise = pd.Timestamp(sun.riselocal(today)).tz_convert(TZ)
-    sunset = pd.Timestamp(sun.setlocal(today)).tz_convert(TZ)
+    sunrise = pd.Timestamp(sun.riselocal(today)).tz_convert(tz)
+    sunset = pd.Timestamp(sun.setlocal(today)).tz_convert(tz)
 
     logging.info("Sunrise today: %s", sunrise)
     logging.info("Sunset today: %s", sunset)
@@ -229,9 +259,9 @@ def publish_day():
     start_time = todayp.replace(hour=0, minute=0, second=0, microsecond=0, nanosecond=0)
     end_time = todayp.replace(hour=23, minute=59, second=59)
 
-    times = pd.date_range(start_time, end_time, freq="1min", tz=TZ)
+    times = pd.date_range(start_time, end_time, freq="1min", tz=tz)
 
-    loc = location.Location(lat, lon, TZ, alt, "Home")
+    loc = location.Location(lat, lon, tz, alt, "Home")
     logging.info(loc)
 
     solpos = loc.get_solarposition(times)
@@ -278,7 +308,7 @@ def publish_day():
     start_time = sunset - delta_time
     logging.info("Start time: %s", start_time)
 
-    now = pd.Timestamp.now(tz=TZ)
+    now = pd.Timestamp.now(tz=tz)
     logging.info("Time right now: %s", now)
 
     delay = start_time - now
@@ -337,7 +367,7 @@ def publish_day():
                 "x": float(f"{row['X']:.4f}"),
                 "y": float(f"{row['Y']:.4f}"),
                 "brightness": max(int(row["Brightness"] * 254), 1),
-                "ts": pd.Timestamp.now(tz=TZ).isoformat(),
+                "ts": pd.Timestamp.now(tz=tz).isoformat(),
                 "lat": lat,
                 "lon": lon,
                 "alt_m": alt,

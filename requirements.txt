@@ -3,3 +3,4 @@ paho-mqtt
 pandas
 pvlib
 suntimes
+timezonefinder
