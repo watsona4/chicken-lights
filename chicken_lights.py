@@ -194,14 +194,15 @@ signal.signal(signal.SIGINT, handler)
 
 
 def publish_day():
-    global LATITUDE, LONGITUDE, ALTITUDE
+
+    lat, lon, alt = LATITUDE, LONGITUDE, ALTITUDE
 
     # Get a fresh gpsd fix at the start of the day (if configured)
     if GPSD_HOST:
         fix = get_fix_from_gpsd(GPSD_HOST, GPSD_PORT, GPSD_TIMEOUT_S)
         if fix:
-            LATITUDE, LONGITUDE, ALTITUDE = fix
-            logging.info("Using gpsd fix: lat=%s lon=%s alt=%sm", LATITUDE, LONGITUDE, ALTITUDE)
+            lat, lon, alt = fix
+            logging.info("Using gpsd fix: lat=%s lon=%s alt=%sm", lat, lon, alt)
         else:
             logging.warning("gpsd configured but no fix, using env LAT/LON/ALT")
     last_gpsd_check = time.time()
@@ -209,7 +210,7 @@ def publish_day():
     today = pd.Timestamp.today(tz=TZ)
     logging.info("Today is %s", today)
 
-    sun = suntimes.SunTimes(LONGITUDE, LATITUDE, ALTITUDE)
+    sun = suntimes.SunTimes(lon, lat, alt)
     logging.info("Sun: %s", sun)
 
     sunrise = pd.Timestamp(sun.riselocal(today)).tz_convert(TZ)
@@ -230,7 +231,8 @@ def publish_day():
 
     times = pd.date_range(start_time, end_time, freq="1min", tz=TZ)
 
-    loc = location.Location(LATITUDE, LONGITUDE, TZ, ALTITUDE)
+    loc = location.Location(lat, lon, TZ, alt, "Home")
+    logging.info(loc)
 
     solpos = loc.get_solarposition(times)
 
@@ -313,8 +315,8 @@ def publish_day():
             fix = get_fix_from_gpsd(GPSD_HOST, GPSD_PORT, GPSD_TIMEOUT_S)
             last_gpsd_check = time.time()
             if fix:
-                LATITUDE, LONGITUDE, ALTITUDE = fix
-                logging.info("Updated gpsd fix: lat=%s lon=%s alt=%sm", LATITUDE, LONGITUDE, ALTITUDE)
+                lat, log, alt = fix
+                logging.info("Updated gpsd fix: lat=%s lon=%s alt=%sm", lat, log, alt)
             else:
                 logging.warning("gpsd refresh failed, keeping previous location")
 
@@ -336,9 +338,9 @@ def publish_day():
                 "y": float(f"{row['Y']:.4f}"),
                 "brightness": max(int(row["Brightness"] * 254), 1),
                 "ts": pd.Timestamp.now(tz=TZ).isoformat(),
-                "lat": LATITUDE,
-                "lon": LONGITUDE,
-                "alt_m": ALTITUDE,
+                "lat": lat,
+                "lon": lon,
+                "alt_m": alt,
             }),
             qos=1,
         )
